@@ -13,6 +13,8 @@ class JobController < ApplicationController
 		if @job.attack_type == "bruteforce"
 			@charset = @job.charset
 
+			Bruteforce::initiateKeyspaceDict()
+
 			# keyspace
 			jobKeyspace = Bruteforce::generateSubkeyspace(@job.charset, @job.next_index, 50)
 
@@ -23,9 +25,9 @@ class JobController < ApplicationController
 				@bruteforce_status = @job.next_index
 				@keyspace_size = Bruteforce::totalSize(@charset)
 
-				@bruteforce_percentage = (@bruteforce_status.to_f / @keyspace_size.to_f * 100.0).to_i
+				@bruteforce_percentage = ((@bruteforce_status.to_f / @keyspace_size.to_f * 100.0).to_i).to_s + "%"
 			else
-				@bruteforce_percentage = 0
+				@bruteforce_percentage = "N/A"
 			end
 		end
 	end
@@ -58,6 +60,7 @@ class JobController < ApplicationController
 					flag_meta.job_id = @job.id
 					flag_meta.match_value = rfm[:match_value]
 					flag_meta.match_type = rfm[:match_type]
+					flag_meta.match_delivery = rfm[:match_delivery]
 					flag_meta.save
 				end
 			end
@@ -103,6 +106,7 @@ class JobController < ApplicationController
 				flag_meta.job_id = @job.id
 				flag_meta.match_value = rfm[:match_value]
 				flag_meta.match_type = rfm[:match_type]
+				flag_meta.match_delivery = rfm[:match_delivery]
 				flag_meta.save
 			end
 		end
@@ -116,30 +120,59 @@ class JobController < ApplicationController
 		end
 	end
 
+	def start
+		@job = Job.find(params[:jobid])
+		@job.status = "active"
+		@job.save
+
+		flash[:notice] = "Job #{@job.id} started"
+		redirect_to action: "index"
+	end
+
+	def stop
+		@job = Job.find(params[:jobid])
+		@job.status = "pending"
+		@job.save
+
+		flash[:notice] = "Job #{@job.id} stopped"
+		redirect_to action: "index"
+	end
+
 	def destroy
 		Job.find(params[:jobid]).destroy
+
+		flash[:notice] = "Job #{params[:jobid]} destroyed"
 		redirect_to action: "index"
 	end
 
 	# For API Call
 	def bruteforce_progress
 		job = Job.find(params[:jobid])
+		Bruteforce::initiateKeyspaceDict()
 
-		jobKeyspace = Bruteforce::generateSubkeyspace(job.charset, job.next_index, 50)
+		begin
+			jobKeyspace = Bruteforce::generateSubkeyspace(job.charset, job.next_index, 50)
 
-		keyspace_start_val = jobKeyspace[0]
-		keyspace_end_val = jobKeyspace[-1]
+			keyspace_start_val = jobKeyspace[0]
+			keyspace_end_val = jobKeyspace[-1]
 
-		bruteforce_status = job.next_index
-		keyspace_size = Bruteforce::totalSize(job.charset)
+			bruteforce_status = job.next_index
+			keyspace_size = Bruteforce::totalSize(job.charset)
 
-		progress_percentage = (bruteforce_status.to_f / keyspace_size.to_f * 100.0).to_i
-	
-		render :json => { 
-			"keyspace_start" 	=> keyspace_start_val,
-			"keyspace_end" 		=> keyspace_end_val,
-			"keyspace_progress" => progress_percentage
-		}
+			progress_percentage = (bruteforce_status.to_f / keyspace_size.to_f * 100.0).to_i
+		
+			render :json => { 
+				"keyspace_start" 	=> keyspace_start_val,
+				"keyspace_end" 		=> keyspace_end_val,
+				"keyspace_progress" => progress_percentage + "%"
+			}
+		rescue Exception => e
+			render :json => { 
+				"keyspace_start" 	=> "N/A",
+				"keyspace_end" 		=> "N/A",
+				"keyspace_progress" => "N/A"
+			}
+		end
 	end
 
 	def checkins_since_timestamp
@@ -160,6 +193,7 @@ class JobController < ApplicationController
 			:attack_mode,
 			:status,
 			:dictionary_id,
+			:node_limit,
 			:charset)
 	end
 end

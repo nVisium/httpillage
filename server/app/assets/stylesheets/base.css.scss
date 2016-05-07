@@ -1,6 +1,11 @@
 @charset "utf-8";
 @import "compass/css3";
 
+fieldset { 
+	border: none;
+	padding:none; 
+}
+
 .notification-box {
 	text-align: center;
 	color: white;
@@ -12,8 +17,8 @@
 	@include border-radius(4px, 4px);
 }
 
-.alert .notification-box { background-color: #D04B33; }
-.notice .notification-box { background-color: #009900; }
+.alert .notification-box, .stop-button { background-color: #D04B33; }
+.notice .notification-box, .start-button { background-color: #009900; }
 
 .active-job-label, .success-label { color: #009900; }
 .inactive-job-label, .error-label { color: #d04b33; }
@@ -47,6 +52,9 @@
 
 //-- Jobs --//
 
+.fixed-length-text { width: 350px; }
+.input-field-full { width: 100%; }
+
 .search-form {
 	display: inline-block;
 	margin-bottom: 1em;
@@ -62,6 +70,9 @@
 }
 
 .job-responses tbody tr { cursor: pointer; }
+.full { width:100%; }
+.right { float:right; }
+.inline { display: inline !IMPORTANT; }
 
 //-- Create Jobs/Dictionary --//
 .create-form {
@@ -75,6 +86,20 @@
 	}
 }
 
+//-- Template Components --//
+.user-menu { 
+	text-align: right; 
+	padding-top: 4px; 
+}
+
+.notification-container {
+	padding: 0; 
+	margin: 0; 
+	border: none;
+}
+
+.paginate_button { margin-right:5px; }
+
 //-- View Jobs --//
 .item {
 	margin-bottom: 2em;
@@ -86,4 +111,10 @@
 // -- Show Users --//
 .show-user form {
 	display: inline;
+}
+
+// -- Hacks that should be cleaned up --/
+.job-margin-fix {
+	margin-top:-30px;
+	margin-bottom:30px;
 }

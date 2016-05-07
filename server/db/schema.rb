@@ -11,7 +11,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 20151006121706) do
+ActiveRecord::Schema.define(version: 20160503174305) do
 
   create_table "bruteforce_statuses", force: :cascade do |t|
     t.integer  "node_id"
@@ -21,6 +21,13 @@ ActiveRecord::Schema.define(version: 20151006121706) do
     t.datetime "updated_at", null: false
   end
 
+  create_table "charsets", force: :cascade do |t|
+    t.string "key"
+    t.string "val"
+  end
+
+  add_index "charsets", ["key"], name: "index_charsets_on_key"
+
   create_table "dictionaries", force: :cascade do |t|
     t.string   "filename"
     t.string   "original_filename"
@@ -28,7 +35,7 @@ ActiveRecord::Schema.define(version: 20151006121706) do
     t.datetime "created_at",        null: false
     t.datetime "updated_at",        null: false
     t.integer  "file_size"
-    t.string   "preview"
+    t.text     "preview"
   end
 
   create_table "dictionary_chunk_allocations", force: :cascade do |t|
@@ -69,6 +76,7 @@ ActiveRecord::Schema.define(version: 20151006121706) do
     t.string   "description"
     t.string   "charset"
     t.integer  "next_index"
+    t.integer  "node_limit"
   end
 
   add_index "jobs", ["user_id"], name: "index_jobs_on_user_id"
@@ -96,8 +104,9 @@ ActiveRecord::Schema.define(version: 20151006121706) do
     t.integer  "job_id"
     t.string   "match_type"
     t.string   "match_value"
-    t.datetime "created_at",  null: false
-    t.datetime "updated_at",  null: false
+    t.datetime "created_at",     null: false
+    t.datetime "updated_at",     null: false
+    t.string   "match_delivery"
   end
 
   add_index "response_flag_meta", ["job_id"], name: "index_response_flag_meta_on_job_id"

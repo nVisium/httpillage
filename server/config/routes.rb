@@ -7,12 +7,14 @@ Rails.application.routes.draw do
 	  get 'health', 														to: 'health#index'
 	  get 'poll(/:nodeid(/:jobid))', 						to: 'dispatcher#poll'
 	  get 'checkin/:nodeid/:jobid/:status_code',to: 'dispatcher#checkin'
+	  get 'charsets',														to: 'charset#index'
 
 	  # Intruder will use the following endpoints to create and manage jobs
 	  post 'job/create', 												to: 'job#create'
 
 	  post 'job/:jobid/saveResponse', to: 'job_response#create'
 	  post 'job/:jobid/saveMatch',		to: 'response_flag#create'
+	  post 'job/:jobid/saveMatchBatch', to: 'response_flag#create_bulk'
 	end
 
 	get 'settings',								to: 'setting#index', as: 'settings'
@@ -32,8 +34,12 @@ Rails.application.routes.draw do
 	get 'job/matches/:jobid',			to: 'response_flag#index', as: 'export_job_matches'
 	get 'job/statuses/:jobid',		to: 'node_status#index',	as: 'export_node_status'
 
-	get 'nodes', 									to: 'node#index'
+	# For controlling jobs
+	patch 'job/:jobid/start',			to: 'job#start', as: 'start_job'
+	patch 'job/:jobid/stop',			to: 'job#stop',	as: 'stop_job'
 	delete 'job/:jobid', 					to: 'job#destroy', as: 'job'
+
+	get 'nodes', 									to: 'node#index'
 
 	get 'dictionaries',						to: 'dictionary#index'
 	get 'dictionary/:dictionaryid', to: 'dictionary#show', as: 'download_dictionary'
@@ -41,11 +47,16 @@ Rails.application.routes.draw do
 	post 'dictionaries',					to: 'dictionary#create'
 	delete 'dictionary/:dictionaryid', to: 'dictionary#destroy', as: 'destroy_dictionary'
 
+	get 'charsets',						to: 'charset#index'
+	get 'charset/new',				to: 'charset#new'
+	post 'charsets',					to: 'charset#create'
+	delete 'charset/:charsetid', to: 'charset#destroy', as: 'destroy_charset'
+
 
 	get 'users',									to: 'user#index', as: 'users'
 	get 'user/:userid',						to: 'user#show', as: 'show_user'
 	get 'users/new',							to: 'user#new'
-	post 'users',									to: 'user#create'
+	post 'users',									to: 'user#create', as: 'create_user'
 	get 'users/edit/:userid',			to: 'user#edit',	as: 'edit_user'
 	patch 'users/:userid',				to: 'user#update', as: 'user'
 	delete 'user/:userid', 				to: 'user#destroy', as: 'destroy_user'
